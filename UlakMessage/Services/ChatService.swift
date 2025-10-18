@@ -12,6 +12,7 @@ class ChatService {
     static let shared = ChatService()
     
     private let database = Database.database().reference()
+    private var messageListeners: [String: DatabaseHandle] = [:] // Çoklu listener takibi
     
     private init() {}
     
@@ -170,11 +171,12 @@ class ChatService {
     }
     
     // Mesaj gönder
-    func sendMessage(chat: Chat, sender: User, text: String) async throws {
+    func sendMessage(chat: Chat, sender: User, text: String, type: MessageType = .text, mediaURL: String? = nil) async throws {
         print("📤 Mesaj gönderiliyor...")
         print("💬 Chat ID: \(chat.id)")
         print("👤 Gönderen: \(sender.username)")
         print("📝 Mesaj: \(text)")
+        print("🎨 Tip: \(type.rawValue)")
         
         let message = Message(
             chatId: chat.id,
@@ -182,18 +184,25 @@ class ChatService {
             senderUsername: sender.username,
             text: text,
             timestamp: Date(),
-            isRead: false
+            isRead: false,
+            type: type,
+            mediaURL: mediaURL
         )
         
-        let messageData: [String: Any] = [
+        var messageData: [String: Any] = [
             "id": message.id,
             "chatId": message.chatId,
             "senderId": message.senderId,
             "senderUsername": message.senderUsername,
             "text": message.text,
             "timestamp": message.timestamp.timeIntervalSince1970,
-            "isRead": message.isRead
+            "isRead": message.isRead,
+            "type": message.type.rawValue
         ]
+        
+        if let mediaURL = mediaURL {
+            messageData["mediaURL"] = mediaURL
+        }
         
         // Mesajı kaydet
         do {
@@ -205,8 +214,9 @@ class ChatService {
         }
         
         // Chat'in son mesajını güncelle
+        let displayText = type == .text ? text : "📎 \(type.rawValue.capitalized)"
         let chatUpdates: [String: Any] = [
-            "lastMessage": text,
+            "lastMessage": displayText,
             "lastMessageTimestamp": message.timestamp.timeIntervalSince1970,
             "lastMessageSenderId": sender.id
         ]
@@ -220,41 +230,72 @@ class ChatService {
         }
     }
     
-    // Mesajları dinle (realtime)
-    func observeMessages(chatId: String, completion: @escaping ([Message]) -> Void) {
-        print("👂 Mesajlar dinleniyor: \(chatId)")
+    // 🚀 OPTİMİZE EDİLMİŞ MESAJ DİNLEME - Sadece yeni mesajlar için
+    func observeMessages(chatId: String,
+                        onInitialLoad: @escaping ([Message]) -> Void,
+                        onNewMessage: @escaping (Message) -> Void) {
+        print("👂 Optimize mesaj dinleme başlatıldı: \(chatId)")
         
-        database.child("messages").child(chatId)
-            .queryOrdered(byChild: "timestamp")
-            .observe(.value) { snapshot in
-                print("📦 Mesaj snapshot alındı: \(snapshot.childrenCount) mesaj")
-                
-                guard let messagesData = snapshot.value as? [String: [String: Any]] else {
-                    print("⚠️ Mesaj verisi yok")
-                    completion([])
-                    return
-                }
-                
-                var messages: [Message] = []
-                
-                for (messageId, messageData) in messagesData {
-                    do {
-                        let message = try self.parseMessage(data: messageData)
-                        messages.append(message)
-                    } catch {
-                        print("⚠️ Mesaj parse edilemedi: \(messageId)")
-                    }
-                }
-                
-                messages.sort { $0.timestamp < $1.timestamp }
-                print("✅ \(messages.count) mesaj yüklendi")
-                completion(messages)
+        let messagesRef = database.child("messages").child(chatId).queryOrdered(byChild: "timestamp")
+        
+        // İlk yükleme - Tüm mesajları al
+        messagesRef.observeSingleEvent(of: .value) { snapshot in
+            print("📦 İlk mesaj yüklemesi: \(snapshot.childrenCount) mesaj")
+            
+            guard let messagesData = snapshot.value as? [String: [String: Any]] else {
+                print("⚠️ Mesaj verisi yok")
+                onInitialLoad([])
+                return
             }
+            
+            var messages: [Message] = []
+            
+            for (_, messageData) in messagesData {
+                do {
+                    let message = try self.parseMessage(data: messageData)
+                    messages.append(message)
+                } catch {
+                    print("⚠️ Mesaj parse edilemedi")
+                }
+            }
+            
+            messages.sort { $0.timestamp < $1.timestamp }
+            print("✅ \(messages.count) mesaj ilk yükleme tamamlandı")
+            onInitialLoad(messages)
+        }
+        
+        // Yeni mesajları dinle - .childAdded eventi
+        let newMessageHandle = messagesRef.observe(.childAdded) { [weak self] snapshot in
+            guard let self = self else { return }
+            guard let messageData = snapshot.value as? [String: Any] else { return }
+            
+            do {
+                let message = try self.parseMessage(data: messageData)
+                
+                // İlk yüklemede gelen mesajları atla (timestamp kontrolü)
+                let timeDiff = Date().timeIntervalSince(message.timestamp)
+                if timeDiff < 2 { // Son 2 saniyede gelen = yeni mesaj
+                    print("🆕 Yeni mesaj alındı: \(message.id)")
+                    onNewMessage(message)
+                }
+            } catch {
+                print("⚠️ Yeni mesaj parse edilemedi")
+            }
+        }
+        
+        // Listener'ı sakla
+        messageListeners[chatId] = newMessageHandle
     }
     
     // Mesajları dinlemeyi durdur
     func removeObserver(chatId: String) {
         print("🛑 Mesaj dinleme durduruldu: \(chatId)")
+        
+        if let handle = messageListeners[chatId] {
+            database.child("messages").child(chatId).removeObserver(withHandle: handle)
+            messageListeners.removeValue(forKey: chatId)
+        }
+        
         database.child("messages").child(chatId).removeAllObservers()
     }
     
@@ -269,6 +310,9 @@ class ChatService {
             throw NSError(domain: "ChatService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Mesaj parse edilemedi"])
         }
         
+        let typeString = data["type"] as? String ?? "text"
+        let type = MessageType(rawValue: typeString) ?? .text
+        
         return Message(
             id: id,
             chatId: chatId,
@@ -276,7 +320,9 @@ class ChatService {
             senderUsername: senderUsername,
             text: text,
             timestamp: Date(timeIntervalSince1970: timestampValue),
-            isRead: data["isRead"] as? Bool ?? false
+            isRead: data["isRead"] as? Bool ?? false,
+            type: type,
+            mediaURL: data["mediaURL"] as? String
         )
     }
 }

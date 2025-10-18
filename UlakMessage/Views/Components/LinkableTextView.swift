@@ -60,8 +60,16 @@ struct LinkableTextView: View {
             case .link(let detectedLink):
                 var attrString = AttributedString(detectedLink.displayText)
                 attrString.link = detectedLink.url
-                attrString.foregroundColor = isCurrentUser ? .white : .blue
-                attrString.underlineStyle = .single
+                
+                // 🎨 TEMA UYUMLU LINK RENGİ
+                if isCurrentUser {
+                    attrString.foregroundColor = .white
+                    attrString.underlineStyle = .single
+                } else {
+                    attrString.foregroundColor = themeViewModel.currentTheme.primaryColor
+                    attrString.underlineStyle = .single
+                }
+                
                 result.append(attrString)
             }
         }
@@ -82,8 +90,6 @@ struct SafariView: UIViewControllerRepresentable {
         let safari = SFSafariViewController(url: url, configuration: config)
         safari.preferredControlTintColor = UIColor.systemBlue
         safari.dismissButtonStyle = .close
-        
-        // Kapatma için coordinator ekle
         safari.delegate = context.coordinator
         
         let navigationController = UINavigationController(rootViewController: safari)

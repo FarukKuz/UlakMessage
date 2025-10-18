@@ -23,11 +23,16 @@ class AuthViewModel: ObservableObject {
         }
     }
     
-    // Oturum durumunu kontrol et
+    // App açıldığında
     func checkAuthStatus() async {
         isLoading = true
         do {
             currentUser = try await authService.checkAuthStatus()
+            
+            // Eğer kullanıcı varsa presence tracking başlat
+            if let userId = currentUser?.id {
+                UserService.shared.startPresenceTracking(userId: userId)
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -62,8 +67,12 @@ class AuthViewModel: ObservableObject {
         isLoading = false
     }
     
-    // Çıkış yap
+    // Çıkış yapılınca
     func signOut() {
+        if let userId = currentUser?.id {
+            UserService.shared.stopPresenceTracking(userId: userId)
+        }
+        
         do {
             try authService.signOut()
             currentUser = nil
