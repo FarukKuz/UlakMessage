@@ -58,7 +58,7 @@ class AuthService {
         
         // Kullanıcı adını kaydet (eşsiz olması için)
         try await database.child("usernames").child(username.lowercased()).setValue(result.user.uid)
-        
+            
         return user
     }
     
@@ -75,19 +75,21 @@ class AuthService {
         // Kullanıcıyı online yap
         try await updateUserOnlineStatus(uid: result.user.uid, isOnline: true)
         
+        // Presence tracking başlat
+        UserService.shared.startPresenceTracking(userId: user.id)
+    
         return user
     }
     
     // Çıkış yap
     func signOut() throws {
-        guard let uid = auth.currentUser?.uid else { return }
+        guard let userId = Auth.auth().currentUser?.uid else { return }
         
-        // Kullanıcıyı offline yap
-        Task {
-            try? await updateUserOnlineStatus(uid: uid, isOnline: false)
-        }
+        // Önce offline yap
+        UserService.shared.stopPresenceTracking(userId: userId)
         
-        try auth.signOut()
+        // Sonra sign out
+        try Auth.auth().signOut()
     }
     
     // Kullanıcıyı veritabanına kaydet

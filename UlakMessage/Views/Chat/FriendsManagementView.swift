@@ -251,26 +251,24 @@ struct FriendsManagementView: View {
         isLoadingChat = true
         
         Task {
-            do {
-                if let chat = await chatViewModel.getOrCreateChat(currentUser: currentUser, otherUser: friend) {
-                    print("✅ Chat hazır: \(chat.id)")
-                    
-                    let wrapper = ChatWithUser(
-                        chat: chat,
-                        otherUserId: friend.id,
-                        otherUsername: friend.username,
-                        otherDisplayName: friend.displayName
-                    )
-                    
-                    await MainActor.run {
-                        isLoadingChat = false
-                        selectedChatWrapper = wrapper
-                    }
-                } else {
-                    print("❌ Chat oluşturulamadı")
-                    await MainActor.run {
-                        isLoadingChat = false
-                    }
+            if let chat = await chatViewModel.getOrCreateChat(currentUser: currentUser, otherUser: friend) {
+                print("✅ Chat hazır: \(chat.id)")
+                
+                let wrapper = ChatWithUser(
+                    chat: chat,
+                    otherUserId: friend.id,
+                    otherUsername: friend.username,
+                    otherDisplayName: friend.displayName
+                )
+                
+                await MainActor.run {
+                    isLoadingChat = false
+                    selectedChatWrapper = wrapper
+                }
+            } else {
+                print("❌ Chat oluşturulamadı")
+                await MainActor.run {
+                    isLoadingChat = false
                 }
             }
         }
